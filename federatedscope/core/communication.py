@@ -41,7 +41,7 @@ class StandaloneCommManager(object):
             return self.neighbors
 
     def send(self, message):
-        self.comm_queue.append(message)
+        self.comm_queue.put(message)
         download_bytes, upload_bytes = message.count_bytes()
         self.monitor.track_upload_bytes(upload_bytes)
 

@@ -41,6 +41,7 @@ def extend_fl_setting_cfg(cfg):
     # in each training round, ['uniform', 'group']
     cfg.federate.resource_info_file = ""  # the device information file to
     # record computation and communication ability
+    cfg.federate.thread_pool_size = 8
 
     # ---------------------------------------------------------------------- #
     # Distribute training related options
