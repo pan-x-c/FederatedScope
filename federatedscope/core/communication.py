@@ -1,3 +1,4 @@
+import logging
 import grpc
 from concurrent import futures
 
@@ -7,6 +8,7 @@ from federatedscope.core.proto import gRPC_comm_manager_pb2, \
 from federatedscope.core.gRPC_server import gRPCComServeFunc
 from federatedscope.core.message import Message
 
+logger = logging.getLogger(__name__)
 
 class StandaloneCommManager(object):
     """
@@ -39,7 +41,7 @@ class StandaloneCommManager(object):
             return self.neighbors
 
     def send(self, message):
-        self.comm_queue.append(message)
+        self.comm_queue.put(message)
         download_bytes, upload_bytes = message.count_bytes()
         self.monitor.track_upload_bytes(upload_bytes)
 
@@ -66,6 +68,7 @@ class gRPCCommManager(object):
                                       port=port,
                                       options=options)
         self.neighbors = dict()
+        self.grpc_clients = dict()
         self.monitor = None  # used to track the communication related metrics
 
     def serve(self, max_workers, host, port, options):
@@ -116,15 +119,20 @@ class gRPCCommManager(object):
                                             options=(('grpc.enable_http_proxy',
                                                       0), ))
             stub = gRPC_comm_manager_pb2_grpc.gRPCComServeFuncStub(channel)
-            return stub, channel
-
-        stub, channel = _create_stub(receiver_address)
+            # todo: close channel when no longer in use
+            logger.info('Server: create rpc stub for {}'.format(receiver_address))
+            return {
+                'stub': stub,
+                'channel': channel
+            }
         request = message.transform(to_list=True)
+        if receiver_address not in self.grpc_clients:
+            self.grpc_clients[receiver_address] = _create_stub(receiver_address)
+        client = self.grpc_clients[receiver_address]
         try:
-            stub.sendMessage(request)
+            client['stub'].sendMessage(request)
         except grpc._channel._InactiveRpcError:
             pass
-        channel.close()
 
     def send(self, message):
         receiver = message.receiver

@@ -1,7 +1,8 @@
 import logging
-
-from collections import deque
+import threading
 import heapq
+from queue import Empty, Queue
+
 
 import numpy as np
 
@@ -64,7 +65,7 @@ class FedRunner(object):
             config.federate.resource_info_file)
 
         if self.mode == 'standalone':
-            self.shared_comm_queue = deque()
+            self.shared_comm_queue = Queue()
             self._setup_for_standalone()
             # in standalone mode, by default, we print the trainer info only
             # once for better logs readability
@@ -217,8 +218,8 @@ class FedRunner(object):
         cached_bc_msgs = []
         cur_idx = 0
         while True:
-            if len(self.shared_comm_queue) > 0:
-                msg = self.shared_comm_queue.popleft()
+            if not self.shared_comm_queue.empty():
+                msg = self.shared_comm_queue.get()
                 if is_broadcast(msg):
                     cached_bc_msgs.append(msg)
                     # assume there is at least one client
@@ -245,16 +246,26 @@ class FedRunner(object):
 
         server_msg_cache = list()
         while True:
-            if len(self.shared_comm_queue) > 0:
-                msg = self.shared_comm_queue.popleft()
+            threads = list()
+            try:
+                msg = self.shared_comm_queue.get(block=True, timeout=1)
                 if msg.receiver == [self.server_id]:
                     # For the server, move the received message to a
                     # cache for reordering the messages according to
                     # the timestamps
                     heapq.heappush(server_msg_cache, msg)
                 else:
-                    self._handle_msg(msg)
-            elif len(server_msg_cache) > 0:
+                    threads.append(threading.Thread(target=self._handle_msg, args=(msg,)))
+                while len(threads) < self.cfg.federate.thread_pool_size and not self.shared_comm_queue.empty():
+                    msg = self.shared_comm_queue.get(block=False)
+                    if msg.receiver == [self.server_id]:
+                        heapq.heappush(server_msg_cache, msg)
+                    else:
+                        threads.append(threading.Thread(target=self._handle_msg, args=(msg,)))
+            except Empty:
+                ...
+
+            while len(threads) < self.cfg.federate.thread_pool_size and len(server_msg_cache) > 0:
                 msg = heapq.heappop(server_msg_cache)
                 if self.cfg.asyn.use and self.cfg.asyn.aggregator \
                         == 'time_up':
@@ -264,21 +275,25 @@ class FedRunner(object):
                     # the cache
                     if self.server.trigger_for_time_up(msg.timestamp):
                         heapq.heappush(server_msg_cache, msg)
-                    else:
-                        self._handle_msg(msg)
-                else:
-                    self._handle_msg(msg)
-            else:
-                if self.cfg.asyn.use and self.cfg.asyn.aggregator \
-                        == 'time_up':
-                    self.server.trigger_for_time_up()
-                    if len(self.shared_comm_queue) == 0 and \
-                            len(server_msg_cache) == 0:
-                        break
-                else:
-                    # terminate when shared_comm_queue and
-                    # server_msg_cache are all empty
+                        continue
+                threads.append(threading.Thread(target=self._handle_msg, args=(msg,)))
+
+            if len(threads) > 0:
+                logger.info("Run {} jobs in parallel".format(len(threads)))
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+            elif len(threads) == 0 and self.cfg.asyn.use and self.cfg.asyn.aggregator \
+                    == 'time_up':
+                self.server.trigger_for_time_up()
+                if self.shared_comm_queue.empty() and \
+                        len(server_msg_cache) == 0:
                     break
+            else:
+                # terminate when shared_comm_queue and
+                # server_msg_cache are all empty
+                break
 
     def _setup_server(self, resource_info=None, client_resource_info=None):
         """
