@@ -2,6 +2,7 @@ import copy
 import logging
 import sys
 import pickle
+import multiprocessing
 
 from federatedscope.core.message import Message
 from federatedscope.core.communication import StandaloneCommManager, \
@@ -131,6 +132,9 @@ class Client(Worker):
                 'host': self.comm_manager.host,
                 'port': self.comm_manager.port
             }
+        if self._cfg.federate.parallel:
+            self.parallel_manager = multiprocessing.Manager()
+            self.parallel_result = self.parallel_manager.dict()
 
     def _gen_timestamp(self, init_timestamp, instance_number):
         if init_timestamp is None:
@@ -295,7 +299,16 @@ class Client(Worker):
                         f"early stopped. "
                         f"The next FL update may result in negative effect")
                     self._monitor.local_converged()
-                sample_size, model_para_all, results = self.trainer.train()
+                if self._cfg.federate.parallel:
+                    result = self.parallel_manager.dict()
+                    p = multiprocessing.Process(target=self.trainer.train_in_process, args=(result,))
+                    p.start()
+                    p.join()
+                    sample_size = result['num_samples']
+                    model_para_all = result['model_para']
+                    results = result['eval_metrics']
+                else:
+                    sample_size, model_para_all, results = self.trainer.train()
                 if self._cfg.federate.share_local_model and not \
                         self._cfg.federate.online_aggr:
                     model_para_all = copy.deepcopy(model_para_all)
