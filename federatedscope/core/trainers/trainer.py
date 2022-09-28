@@ -227,8 +227,8 @@ class Trainer(object):
     def train_in_process(self, result_dic):
         self.ctx.check_split('train')
         num_samples = self._run_routine(MODE.TRAIN, self.hooks_in_train, 'train')
-        result_dic['model_para'] = self.get_model_para()
         result_dic['num_samples'] = num_samples
+        result_dic['model_para'] = self.get_model_para()
         result_dic['eval_metrics'] = self.ctx.eval_metrics
 
     def evaluate(self, target_data_split_name="test", hooks_set=None):
