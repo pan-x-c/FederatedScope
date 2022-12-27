@@ -8,7 +8,7 @@ echo "Test distributed mode with LR..."
 python federatedscope/main.py --cfg scripts/distributed_scripts/distributed_configs/distributed_server.yaml &
 ### server doesn't own data
 # python federatedscope/main.py --cfg scripts/distributed_scripts/distributed_configs/distributed_server_no_data.yaml &
-sleep 2
+sleep 10
 
 # clients
 python federatedscope/main.py --cfg scripts/distributed_scripts/distributed_configs/distributed_client_1.yaml &
