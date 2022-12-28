@@ -48,9 +48,6 @@ class StandaloneCommManager(object):
         download_bytes, upload_bytes = message.count_bytes()
         self.monitor.track_upload_bytes(upload_bytes)
 
-def server_loop(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
 
 class gRPCCommManager(object):
     """
@@ -69,31 +66,29 @@ class gRPCCommManager(object):
              global_cfg.distribute.grpc_enable_http_proxy),
         ]
         self.server_funcs = gRPCComServeFunc()
-        self.loop = asyncio.new_event_loop()
-        Thread(target=server_loop, args=(self.loop,)).start()
-        asyncio.run_coroutine_threadsafe(self.serve(max_workers=client_num,
+        self.serve = self.serve(max_workers=client_num,
                                       host=host,
                                       port=port,
-                                      options=options), self.loop)
+                                      options=options)
         self.neighbors = dict()
         self.monitor = None  # used to track the communication related metrics
         self.channels = dict()
 
         
-    async def serve(self, max_workers, host, port, options):
+    def serve(self, max_workers, host, port, options):
         """
         This function is referred to
         https://grpc.io/docs/languages/python/basics/#starting-the-server
         """
-        server = grpc.aio.server(
+        server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=max_workers),
             options=options)
         gRPC_comm_manager_pb2_grpc.add_gRPCComServeFuncServicer_to_server(
             self.server_funcs, server)
         server.add_insecure_port("{}:{}".format(host, port))
-        await server.start()
+        server.start()
         logger.info("grpc server setup at {}:{}".format(host, port))
-        await server.wait_for_termination()
+        return server
 
     def add_neighbors(self, neighbor_id, address):
         if isinstance(address, dict):
@@ -118,39 +113,39 @@ class gRPCCommManager(object):
             # Get all neighbors
             return self.neighbors
 
-    def _send(self, receiver_address, message):
+    async def _send(self, receiver_address, message):
         def _create_stub(receiver_address):
             """
             This part is referred to
             https://grpc.io/docs/languages/python/basics/#creating-a-stub
             """
-            channel = grpc.insecure_channel(receiver_address,
+            channel = grpc.aio.insecure_channel(receiver_address,
                                             options=(('grpc.enable_http_proxy',
                                                       0), ))
             stub = gRPC_comm_manager_pb2_grpc.gRPCComServeFuncStub(channel)
-            return {
-                'stub': stub, 
-                'channel': channel
-            }
-        if receiver_address not in self.channels:
-            self.channels[receiver_address] = _create_stub(receiver_address)
-        
+            return stub, channel
+
+        stub, channel = _create_stub(receiver_address)
+
         request = message.transform(to_list=True)
-        self.channels[receiver_address]['stub'].sendMessage(request)
+        await stub.sendMessage(request)
+        await channel.close()
 
     def send(self, message):
         receiver = message.receiver
+        send_tasks = []
         if receiver is not None:
             if not isinstance(receiver, list):
                 receiver = [receiver]
             for each_receiver in receiver:
                 if each_receiver in self.neighbors:
                     receiver_address = self.neighbors[each_receiver]
-                    self._send(receiver_address, message)
+                    send_tasks.append(self._send(receiver_address, message))
         else:
             for each_receiver in self.neighbors:
                 receiver_address = self.neighbors[each_receiver]
-                self._send(receiver_address, message)
+                send_tasks.append(self._send(receiver_address, message))
+        asyncio.get_event_loop().run_until_complete(asyncio.wait(send_tasks))
 
     def receive(self):
         received_msg = self.server_funcs.receive()
