@@ -1,28 +1,23 @@
-name: "API Reference"
-on:
-  pull_request:
-    types: [opened, synchronize, edited]
+name: Deploy Sphinx documentation to Pages
+
+on: [push, pull_request]
 
 jobs:
-  docs:
-    if: true == contains(github.event.pull_request.title, 'DOC')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      OS: ${{ matrix.os }}
-      PYTHON: '3.9'
+  pages:
+    runs-on: ubuntu-20.04
     steps:
     - uses: actions/checkout@master
     - name: Setup Python ${{ matrix.python-version }}
       uses: actions/setup-python@master
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Generate Documentation
-      uses: ammaraskar/sphinx-action@master
+    - id: deployment
+      uses: sphinx-notes/pages@v3
       with:
-        docs-folder: "doc/"
-    - name: Upload Documentation
-      uses: actions/upload-artifact@v3
+        documentation_path: ./doc
+        python_version: ${{ matrix.python-version }}
+        publish: false
+    - uses: peaceiris/actions-gh-pages@v3
       with:
-        name: APIReference
-        path: doc/build/html/
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ${{ steps.deployment.outputs.artifact }}
